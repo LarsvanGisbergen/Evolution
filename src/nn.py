@@ -3,6 +3,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}") # This will print 'cuda' or 'cpu' to your console
+
 # Use Tanh activation function, same as before
 activation_func = nn.Tanh()
 

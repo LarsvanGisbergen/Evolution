@@ -1,0 +1,2 @@
+1. NN laten reageren op visual input (cones)
+2. creatures elkaar laten aanvallen/verdedigen

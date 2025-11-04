@@ -5,6 +5,7 @@ import math
 import torch
 import random
 from src.nn import NeuralNetwork
+from src.nn import NeuralNetwork, DEVICE
 
 class BaseCreature:
     def __init__(self, x, y, species_config):
@@ -33,6 +34,7 @@ class BaseCreature:
         # --- NN and Genome Setup ---
         self.nn_layer_sizes = species_config["nn_layer_sizes"]
         self.nn = NeuralNetwork(self.nn_layer_sizes)
+        self.nn.to(DEVICE)
         
         genome_length = self.nn.calculate_genome_length()
         self.genome = np.random.uniform(-1, 1, genome_length)
