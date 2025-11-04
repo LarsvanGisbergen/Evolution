@@ -25,6 +25,7 @@ class BaseCreature:
         self.metabolic_rate = species_config["metabolic_rate"]
         self.move_cost = species_config["move_cost"]
         self.fov_angle = math.radians(species_config["fov_angle_degrees"])
+        self.sense_radius = species_config["sense_radius"]
         # --- Dynamic Stats ---
         self.energy = self.max_energy / 2 # Start with half energy
         self.age = 0
@@ -42,41 +43,71 @@ class BaseCreature:
 
         # --- Other Traits (could also be moved to blueprints later) ---
         self.max_speed = 2.0
-        self.sense_radius = 200.0
+        
+        # --- NEW: Store interaction properties ---
+        self.species_name = species_config["species_name"]
+        self.collision_interactions = species_config.get("collision_interactions", {})
+        self.steal_amount = species_config.get("steal_amount", 0)
+        self.steal_efficiency = species_config.get("steal_efficiency", 0)
+    
+        self.min_offspring = species_config.get("min_offspring", 1)
+        self.max_offspring = species_config.get("max_offspring", 1)
         
         # --- State Variables ---
         self.nn_inputs = []
         self.nn_outputs = []
 
+    def _normalize_angle(self, angle):
+        """Wraps an angle to the range [-pi, pi]."""
+        return (angle + math.pi) % (2 * math.pi) - math.pi
+
     def sense(self, world):
-        """Finds the nearest object (food or creature) and sets NN inputs."""
+        """
+        Finds the nearest object WITHIN THE CREATURE'S FIELD OF VIEW
+        and sets NN inputs.
+        """
         nearest_obj = None
         min_dist = float('inf')
-        obj_type = 0.0 # 1.0 for food, -1.0 for creature
+        obj_type = 0.0
 
-        # Sense nearest creature
-        for other in world.creatures:
-            if other is self: continue
-            dist = math.hypot(self.x - other.x, self.y - other.y)
-            if dist < min_dist and dist < self.sense_radius:
-                min_dist = dist
-                nearest_obj = other
-                obj_type = -1.0
+        # If the creature isn't moving, it can't "see" anything directionally.
+        # This also prevents math errors with atan2(0, 0).
+        if self.vx == 0 and self.vy == 0:
+            self.nn_inputs = [0.0, 0.0, 0.0]
+            return
 
-        # Sense nearest food
-        for food_item in world.food:
-            dist = math.hypot(self.x - food_item.x, self.y - food_item.y)
-            if dist < min_dist and dist < self.sense_radius:
-                min_dist = dist
-                nearest_obj = food_item
-                obj_type = 1.0
+        # 1. Determine the creature's forward-facing angle from its velocity
+        forward_angle = math.atan2(self.vy, self.vx)
 
+        # Combine all potential targets into one list to iterate through
+        all_objects = [('creature', c) for c in world.creatures if c is not self] + \
+                      [('food', f) for f in world.food]
+
+        for obj_type_str, obj in all_objects:
+            # 2. First, do a cheap distance check to filter out distant objects
+            dist = math.hypot(self.x - obj.x, self.y - obj.y)
+            if dist > self.sense_radius:
+                continue
+
+            # 3. If within range, do the more expensive angle check
+            angle_to_obj = math.atan2(obj.y - self.y, obj.x - self.x)
+            angle_diff = self._normalize_angle(angle_to_obj - forward_angle)
+
+            # 4. Check if the object is within the Field of View
+            if abs(angle_diff) < self.fov_angle / 2:
+                # This object is visible. Is it the closest visible object?
+                if dist < min_dist:
+                    min_dist = dist
+                    nearest_obj = obj
+                    obj_type = -1.0 if obj_type_str == 'creature' else 1.0
+        
+        # 5. Set NN inputs based on the closest VISIBLE object
         if nearest_obj:
             dx = (nearest_obj.x - self.x) / self.sense_radius
             dy = (nearest_obj.y - self.y) / self.sense_radius
             self.nn_inputs = [dx, dy, obj_type]
         else:
-            self.nn_inputs = [0.0, 0.0, 0.0] # No object in range
+            self.nn_inputs = [0.0, 0.0, 0.0] # Nothing visible in the cone
 
     def think(self):
         """Processes NN inputs to get outputs using PyTorch."""
@@ -104,26 +135,35 @@ class BaseCreature:
         move_energy_loss = self.move_cost * (speed / self.max_speed)**2
         self.energy -= (self.metabolic_rate + move_energy_loss)
 
-    def reproduce(self):
-        """Creates a new offspring with a mutated version of this creature's genome."""
-        child_x = self.x + random.uniform(-self.radius, self.radius)
-        child_y = self.y + random.uniform(-self.radius, self.radius)
+    def reproduce(self): # --- MODIFIED ---
+        """
+        Creates a list of new offspring, each with a mutated version of the genome.
+        Returns the list of children and the total energy cost.
+        """
+        num_offspring = random.randint(self.min_offspring, self.max_offspring)
+        total_cost = self.reproduction_cost * num_offspring
         
-        # Pass the same blueprint to the child
-        child = BaseCreature(child_x, child_y, self.species_config)
+        children = []
+        if self.energy >= total_cost:
+            for _ in range(num_offspring):
+                child_x = self.x + random.uniform(-self.radius * 2, self.radius * 2)
+                child_y = self.y + random.uniform(-self.radius * 2, self.radius * 2)
+                child = BaseCreature(child_x, child_y, self.species_config)
 
-        # Inherit and mutate the genome
-        mutated_genome = self.genome.copy()
-        for i in range(len(mutated_genome)):
-            if random.random() < self.mutation_rate:
-                change = random.uniform(-self.mutation_amount, self.mutation_amount)
-                mutated_genome[i] += change
-        
-        # Assign the new genome to the child
-        child.genome = mutated_genome
-        child.nn.set_genome(child.genome)
-        
-        return child
+                mutated_genome = self.genome.copy()
+                for i in range(len(mutated_genome)):
+                    if random.random() < self.mutation_rate:
+                        change = random.uniform(-self.mutation_amount, self.mutation_amount)
+                        mutated_genome[i] += change
+                
+                child.genome = mutated_genome
+                child.nn.set_genome(child.genome)
+                children.append(child)
+            
+            return children, total_cost
+        else:
+            # Not enough energy for the litter, so no children are born.
+            return [], 0
 
     def update(self, world):
         """The main sense-think-act loop for the creature."""
@@ -185,3 +225,31 @@ class BaseCreature:
     def is_alive(self):
         """Checks if the creature has enough energy to live."""
         return self.energy > 0
+    
+    def _steal_energy(self, target):
+        """Action: Steals a fixed amount of energy from a target creature."""
+        stolen_energy = min(target.energy, self.steal_amount) # Can't steal more than the target has
+        target.energy -= stolen_energy
+        self.energy += stolen_energy * self.steal_efficiency
+        # Cap energy at max
+        if self.energy > self.max_energy:
+            self.energy = self.max_energy
+
+    # --- NEW: The `on_collide` Dispatcher Method ---
+    def on_collide(self, other_creature, world):
+        """
+        Called by the simulation when a collision occurs.
+        This method dispatches to the correct action based on the blueprint.
+        """
+        other_species = other_creature.species_name
+
+        # Check if we have a defined interaction for this species
+        if other_species in self.collision_interactions:
+            action = self.collision_interactions[other_species]
+
+            # --- Dispatch to the correct action method ---
+            if action == "steal_energy":
+                self._steal_energy(other_creature)
+            # Future actions can be added here:
+            # elif action == "damage":
+            #     self._deal_damage(other_creature)

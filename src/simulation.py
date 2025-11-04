@@ -154,8 +154,20 @@ class Simulation:
         for creature in self.world.creatures:
             creature.update(self.world)
             self.world.handle_boundaries(creature)
+            
+        # 2. Handle Collisions and Interactions (NEW SECTION)
+        # Use a copy of the list to iterate over, as creatures might die
+        all_creatures = self.world.creatures[:]
+        for i, creature_a in enumerate(all_creatures):
+            for creature_b in all_creatures[i+1:]:
+                dist = math.hypot(creature_a.x - creature_b.x, creature_a.y - creature_b.y)
+                if dist < creature_a.radius + creature_b.radius:
+                    # Collision detected!
+                    # The interaction is not necessarily symmetrical.
+                    creature_a.on_collide(creature_b, self.world)
+                    creature_b.on_collide(creature_a, self.world)
 
-        # 2. Handle interactions (eating)
+        # 3. Handle interactions (eating)
         eaten_food = []
         for creature in self.world.creatures:
             for food_item in self.world.food:
@@ -169,24 +181,29 @@ class Simulation:
                     break
         self.world.food = [f for f in self.world.food if f not in eaten_food]
 
-        # 3. Handle Reproduction
+        # 4. Handle Reproduction
         newborns = []
         for creature in self.world.creatures:
+            # Check the basic threshold for a single offspring first.
             if creature.energy >= creature.reproduction_threshold:
-                creature.energy -= creature.reproduction_cost
-                child = creature.reproduce()
-                newborns.append(child)
+                # The reproduce method now determines the litter size and total cost.
+                children, total_cost = creature.reproduce()
+                
+                if children: # If any children were actually created
+                    creature.energy -= total_cost
+                    newborns.extend(children)
         
+        # Add all newborns from all successful reproductions to the world
         self.world.creatures.extend(newborns)
 
-        # 4. Handle deaths
+        # 5. Handle deaths
         survivors = []
         for creature in self.world.creatures:
             if creature.is_alive():
                 survivors.append(creature)
         self.world.creatures = survivors
         
-        # 5. Spawn new food and log data
+        # 6. Spawn new food and log data
         self.tick_counter += 1
         if self.tick_counter % config.FOOD_SPAWN_RATE == 0:
             self.spawn_food()
