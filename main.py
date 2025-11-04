@@ -5,7 +5,7 @@ from src.simulation import Simulation
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT))
+    screen = pygame.display.set_mode((config.SCREEN_WIDTH, config.SCREEN_HEIGHT), vsync=0)
     pygame.display.set_caption("Evolution Blob Simulator")
 
     sim = Simulation(config.SCREEN_WIDTH, config.SCREEN_HEIGHT)

@@ -26,11 +26,11 @@ class World:
             creature.update(self) # Creature still needs the world for sensing
             self.handle_boundaries(creature)
 
-    def draw(self, screen): # --- MODIFIED ---
+    def draw(self, screen, show_vision=False): # --- MODIFIED ---
         """Draw all objects in the world."""
         # Draw food first, so creatures appear on top
         for food_item in self.food:
             food_item.draw(screen)
 
         for creature in self.creatures:
-            creature.draw(screen)
+            creature.draw(screen, show_vision)
