@@ -1,0 +1,10 @@
+# requirements.txt
+
+pygame
+numpy
+# For PyTorch, the exact version can depend on your system and CUDA version.
+# 'torch' will install the latest appropriate version for your OS.
+torch
+torchvision
+torchaudio
+pygame_gui
