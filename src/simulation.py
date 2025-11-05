@@ -11,10 +11,11 @@ import pygame_gui
 from blueprints import SPECIES_BLUEPRINTS
 
 class Simulation:
+    # In src/simulation.py, inside the Simulation class
+
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        # OPTIMIZATION: Initialize world with a cell size for the grid
         self.world = World(width, height, cell_size=config.WORLD_GRID_CELL_SIZE)
         self.is_running = False
         self.clock = pygame.time.Clock()
@@ -23,7 +24,13 @@ class Simulation:
         self.show_vision = False
         self.gui_manager = pygame_gui.UIManager((width, height))
         self.fps_font = pygame.font.SysFont("Arial", 18)
+
+        # --- Dynamic food spawning variables ---
+        self.food_spawn_interval = config.FOOD_SPAWN_INTERVAL
+        self.food_spawn_amount = config.FOOD_SPAWN_AMOUNT
         
+        # --- COMPLETE GUI ELEMENT SETUP ---
+        # Tick Rate Slider & Label
         slider_rect = pygame.Rect((10, 10), (200, 20))
         self.tick_rate_slider = pygame_gui.elements.UIHorizontalSlider(
             relative_rect=slider_rect, start_value=self.target_tick_rate,
@@ -32,19 +39,46 @@ class Simulation:
         self.tick_rate_label = pygame_gui.elements.UILabel(
             relative_rect=label_rect, text=f"Tick Rate: {self.target_tick_rate}",
             manager=self.gui_manager)
+
+        # Food Spawn Interval Slider & Label
+        interval_slider_rect = pygame.Rect((10, 60), (200, 20))
+        self.interval_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=interval_slider_rect, start_value=self.food_spawn_interval,
+            value_range=(1, 500), manager=self.gui_manager)
+        interval_label_rect = pygame.Rect((220, 60), (180, 20))
+        self.interval_label = pygame_gui.elements.UILabel(
+            relative_rect=interval_label_rect, text=f"Spawn Interval: {self.food_spawn_interval}",
+            manager=self.gui_manager)
+
+        # Food Spawn Amount Slider & Label
+        amount_slider_rect = pygame.Rect((10, 85), (200, 20))
+        self.amount_slider = pygame_gui.elements.UIHorizontalSlider(
+            relative_rect=amount_slider_rect, start_value=self.food_spawn_amount,
+            value_range=(1, 50), manager=self.gui_manager)
+        amount_label_rect = pygame.Rect((220, 85), (180, 20))
+        self.amount_label = pygame_gui.elements.UILabel(
+            relative_rect=amount_label_rect, text=f"Spawn Amount: {self.food_spawn_amount}",
+            manager=self.gui_manager)
+        
+        # Vision Toggle Label
         vision_label_rect = pygame.Rect((width - 150, 10), (140, 20))
         self.vision_toggle_label = pygame_gui.elements.UILabel(
             relative_rect=vision_label_rect, text="Vision: OFF [V]",
             manager=self.gui_manager)
+        
+        # Reset Button
+        reset_button_rect = pygame.Rect((width - 150, 35), (140, 30))
+        self.reset_button = pygame_gui.elements.UIButton(
+            relative_rect=reset_button_rect, text="Reset Simulation",
+            manager=self.gui_manager)
+        # ------------------------------------
+
+        # --- THIS IS THE MISSING PART ---
         self.population_data = defaultdict(list)
         self.graph_rect = pygame.Rect(config.GRAPH_X, config.GRAPH_Y, config.GRAPH_WIDTH, config.GRAPH_HEIGHT)
         
-        for blueprint in SPECIES_BLUEPRINTS.values():
-            for _ in range(blueprint["count"]):
-                x, y = random.randint(0, width), random.randint(0, height)
-                self.world.add_creature(BaseCreature(x=x, y=y, species_config=blueprint))
-        
-        self.spawn_food(amount=config.INITIAL_FOOD_COUNT)
+        # Use the helper to populate the world for the first time
+        self._populate_world()
 
     def spawn_food(self, amount=1):
         for _ in range(amount):
@@ -88,14 +122,29 @@ class Simulation:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT: self.is_running = False
+            
             self.gui_manager.process_events(event)
+
+            if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                if event.ui_element == self.reset_button:
+                    self.reset()
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_v:
                     self.show_vision = not self.show_vision
                     self.vision_toggle_label.set_text("Vision: ON [V]" if self.show_vision else "Vision: OFF [V]")
-            if event.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED and event.ui_element == self.tick_rate_slider:
-                self.target_tick_rate = int(event.value)
-                self.tick_rate_label.set_text(f"Tick Rate: {self.target_tick_rate}")
+            
+            # --- MODIFIED: Handle all slider movements ---
+            if event.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED:
+                if event.ui_element == self.tick_rate_slider:
+                    self.target_tick_rate = int(event.value)
+                    self.tick_rate_label.set_text(f"Tick Rate: {self.target_tick_rate}")
+                elif event.ui_element == self.interval_slider:
+                    self.food_spawn_interval = int(event.value)
+                    self.interval_label.set_text(f"Spawn Interval: {self.food_spawn_interval}")
+                elif event.ui_element == self.amount_slider:
+                    self.food_spawn_amount = int(event.value)
+                    self.amount_label.set_text(f"Spawn Amount: {self.food_spawn_amount}")
 
     def update(self, time_delta):
         self.gui_manager.update(time_delta)
@@ -150,9 +199,12 @@ class Simulation:
         
         # Spawn new food and log data
         self.tick_counter += 1
-        # BUG FIX: Use correct config variables for food spawning
-        if self.tick_counter % config.FOOD_SPAWN_INTERVAL == 0:
-            self.spawn_food(amount=config.FOOD_SPAWN_AMOUNT)
+        
+        # --- MODIFIED: Use the dynamic self. variables ---
+        # The 'if' condition prevents division by zero if interval is 0, which it can't be with our slider.
+        if self.food_spawn_interval > 0 and self.tick_counter % self.food_spawn_interval == 0:
+            self.spawn_food(amount=self.food_spawn_amount)
+            
         if self.tick_counter % config.GRAPH_UPDATE_RATE == 0:
             self.log_population_data()
 
@@ -167,3 +219,29 @@ class Simulation:
         # UI TWEAK: Moved FPS counter to a cleaner position
         screen.blit(fps_surface, (10, 35))
         pygame.display.flip()
+        
+    def _populate_world(self):
+        """Clears and populates the world with creatures and food from blueprints."""
+        # Clear any existing entities
+        self.world.creatures.clear()
+        self.world.food.clear()
+        
+        # Populate creatures
+        for blueprint in SPECIES_BLUEPRINTS.values():
+            for _ in range(blueprint["count"]):
+                x = random.randint(0, self.width)
+                y = random.randint(0, self.height)
+                self.world.add_creature(BaseCreature(x=x, y=y, species_config=blueprint))
+        
+        # Populate initial food
+        self.spawn_food(amount=config.INITIAL_FOOD_COUNT)
+        
+    def reset(self):
+        """Resets the simulation to its initial state."""
+        print("--- Simulation Reset ---")
+        # Reset counters and data logs
+        self.tick_counter = 0
+        self.population_data.clear()
+
+        # Repopulate the world using the helper method
+        self._populate_world()

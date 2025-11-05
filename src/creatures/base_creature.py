@@ -31,7 +31,7 @@ class BaseCreature:
         genome_length = self.nn.calculate_genome_length()
         self.genome = np.random.uniform(-1, 1, genome_length)
         self.nn.set_genome(self.genome)
-        self.max_speed = 2.0
+        self.max_speed = species_config["max_speed"]
         self.species_name = species_config["species_name"]
         self.collision_interactions = species_config.get("collision_interactions", {})
         self.steal_amount = species_config.get("steal_amount", 0)
@@ -45,32 +45,48 @@ class BaseCreature:
         return (angle + math.pi) % (2 * math.pi) - math.pi
 
     def sense(self, world):
-        nearest_obj, min_dist, obj_type = None, float('inf'), 0.0
-        if self.vx == 0 and self.vy == 0:
-            self.nn_inputs = [0.0, 0.0, 0.0]
-            return
+        """
+        Gathers the 7 inputs for the new, more complex brain structure.
+        """
+        # --- NEW INPUT 1: Own Energy ---
+        own_energy_normalized = self.energy / self.max_energy
 
-        forward_angle = math.atan2(self.vy, self.vx)
+        # --- Use the grid to find local objects efficiently ---
         local_objects = world.get_neighbors(self, self.sense_radius)
-        all_objects = [('creature', c) for c in local_objects['creatures'] if c is not self] + \
-                      [('food', f) for f in local_objects['food']]
-
-        for obj_type_str, obj in all_objects:
-            dist = math.hypot(self.x - obj.x, self.y - obj.y)
-            if dist > self.sense_radius: continue
-            angle_to_obj = math.atan2(obj.y - self.y, obj.x - self.x)
-            angle_diff = self._normalize_angle(angle_to_obj - forward_angle)
-            if abs(angle_diff) < self.fov_angle / 2:
-                if dist < min_dist:
-                    min_dist, nearest_obj = dist, obj
-                    obj_type = -1.0 if obj_type_str == 'creature' else 1.0
         
-        if nearest_obj:
-            dx = (nearest_obj.x - self.x) / self.sense_radius
-            dy = (nearest_obj.y - self.y) / self.sense_radius
-            self.nn_inputs = [dx, dy, obj_type]
-        else:
-            self.nn_inputs = [0.0, 0.0, 0.0]
+        # --- Find Nearest Food ---
+        nearest_food, min_dist_food = None, float('inf')
+        for food_item in local_objects['food']:
+            dist = math.hypot(self.x - food_item.x, self.y - food_item.y)
+            if dist < min_dist_food:
+                min_dist_food, nearest_food = dist, food_item
+
+        # --- Find Nearest Creature ---
+        nearest_creature, min_dist_creature = None, float('inf')
+        for other in local_objects['creatures']:
+            if other is self: continue
+            dist = math.hypot(self.x - other.x, self.y - other.y)
+            if dist < min_dist_creature:
+                min_dist_creature, nearest_creature = dist, other
+
+        # --- Prepare the 7 NN inputs ---
+        # If no food is near, provide neutral (zero) inputs for it.
+        dx_food = (nearest_food.x - self.x) / self.sense_radius if nearest_food else 0.0
+        dy_food = (nearest_food.y - self.y) / self.sense_radius if nearest_food else 0.0
+        dist_food_norm = (min_dist_food / self.sense_radius) if nearest_food else 0.0
+
+        # If no creature is near, provide neutral (zero) inputs for it.
+        dx_creature = (nearest_creature.x - self.x) / self.sense_radius if nearest_creature else 0.0
+        dy_creature = (nearest_creature.y - self.y) / self.sense_radius if nearest_creature else 0.0
+        # For threat level, we'll use steal_amount for now, normalized.
+        # This is a simple heuristic: a dangerous creature has a high steal_amount.
+        threat_level = (nearest_creature.steal_amount / 50.0) if nearest_creature else 0.0
+        
+        self.nn_inputs = [
+            own_energy_normalized,
+            dx_food, dy_food, dist_food_norm,
+            dx_creature, dy_creature, threat_level
+        ]
 
     def think(self):
         """Processes NN inputs to get outputs using PyTorch on the correct device."""
@@ -82,24 +98,60 @@ class BaseCreature:
         self.nn_outputs = output_tensor.detach().cpu().numpy()
 
     def act(self):
-        acceleration_x, acceleration_y = self.nn_outputs[0], self.nn_outputs[1]
-        self.vx += acceleration_x * 0.1
-        self.vy += acceleration_y * 0.1
-        speed = math.hypot(self.vx, self.vy)
-        if speed > self.max_speed:
-            self.vx = (self.vx / speed) * self.max_speed
-            self.vy = (self.vy / speed) * self.max_speed
+        """
+        Interprets the 4 new NN outputs for direction, speed, and action.
+        """
+        # 1. Interpret the NN outputs
+        direction_x = self.nn_outputs[0]
+        direction_y = self.nn_outputs[1]
+        speed_output = self.nn_outputs[2]
+        action_output = self.nn_outputs[3] # The new "action intent" output
+
+        # 2. Handle Movement (this logic is the same as the previous step)
+        min_speed = self.max_speed * 0.1
+        speed_multiplier = (speed_output + 1) / 2
+        desired_speed = min_speed + speed_multiplier * (self.max_speed - min_speed)
+        
+        direction_magnitude = math.hypot(direction_x, direction_y)
+        if direction_magnitude > 0.01:
+            norm_dx = direction_x / direction_magnitude
+            norm_dy = direction_y / direction_magnitude
+            self.vx = norm_dx * desired_speed
+            self.vy = norm_dy * desired_speed
+        else:
+            self.vx *= 0.9
+            self.vy *= 0.9
+
         self.x += self.vx
         self.y += self.vy
-        move_energy_loss = self.move_cost * (speed / self.max_speed)**2
+
+        # 3. Handle Energy Consumption (same as before)
+        current_speed = math.hypot(self.vx, self.vy)
+        move_energy_loss = self.move_cost * (current_speed / self.max_speed)**2
         self.energy -= (self.metabolic_rate + move_energy_loss)
 
+        # 4. Handle the Action Intent (NEW)
+        # For now, this output does nothing. But the framework is here.
+        # In the future, we could check if action_output > 0.5 and then
+        # try to reproduce, attack, etc.
+        # For example: self.wants_to_reproduce = (action_output > 0.5)
+
     def reproduce(self):
-        num_offspring = random.randint(self.min_offspring, self.max_offspring)
-        total_cost = self.reproduction_cost * num_offspring
+        """
+        Creates a list of new offspring for a single, flat energy cost.
+        Returns the list of children and the total energy cost.
+        """
+        # The cost is now a single, flat fee, not per-child.
+        flat_reproduction_cost = self.reproduction_cost
+        
         children = []
-        if self.energy >= total_cost:
+        # Check if the creature can afford this flat fee.
+        if self.energy >= flat_reproduction_cost:
+            # If it can, determine how many offspring to create.
+            num_offspring = random.randint(self.min_offspring, self.max_offspring)
+            
             for _ in range(num_offspring):
+                # The child creation logic is the same as before.
                 child = BaseCreature(self.x, self.y, self.species_config)
                 mutated_genome = self.genome.copy()
                 for i in range(len(mutated_genome)):
@@ -109,27 +161,19 @@ class BaseCreature:
                 child.genome = mutated_genome
                 child.nn.set_genome(child.genome)
                 children.append(child)
-            return children, total_cost
-        return [], 0
+            
+            # Return the created children and the single flat cost.
+            return children, flat_reproduction_cost
+        else:
+            # Not enough energy for the flat fee, so no children are born.
+            return [], 0
     
     def update(self, world):
         self.sense(world)
         self.think()
         self.act()
 
-    def draw(self, screen, show_vision=False):
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
-        if show_vision and (self.vx != 0 or self.vy != 0):
-            vision_outline_color = (*self.color, 150)
-            angle = math.atan2(self.vy, self.vx)
-            p1 = (int(self.x), int(self.y))
-            angle_left = angle - self.fov_angle / 2
-            p2 = (int(self.x + self.sense_radius * math.cos(angle_left)), 
-                  int(self.y + self.sense_radius * math.sin(angle_left)))
-            angle_right = angle + self.fov_angle / 2
-            p3 = (int(self.x + self.sense_radius * math.cos(angle_right)), 
-                  int(self.y + self.sense_radius * math.sin(angle_right)))
-            pygame.draw.aalines(screen, vision_outline_color, False, [p2, p1, p3])
+    
 
     def is_alive(self):
         return self.energy > 0
@@ -147,3 +191,54 @@ class BaseCreature:
             action = self.collision_interactions[other_species]
             if action == "steal_energy":
                 self._steal_energy(other_creature)
+                
+    
+    
+    def draw(self, screen, show_vision=False):
+        """Draws the creature with transparency based on its energy level."""
+        # 1. Calculate energy percentage (from 0.0 to 1.0)
+        energy_percentage = max(0, self.energy / self.max_energy)
+
+        # 2. Map energy to an alpha value
+        min_alpha = 40
+        max_alpha = 255
+        alpha = int(min_alpha + (energy_percentage * (max_alpha - min_alpha)))
+
+        # 3. Create the color tuple with the new alpha
+        dynamic_color = (*self.color, alpha)
+
+        # 4. Create a temporary surface for the creature
+        creature_surf = pygame.Surface((self.radius * 2, self.radius * 2), pygame.SRCALPHA)
+        
+        # 5. Draw the circle onto the temporary surface
+        pygame.draw.circle(
+            surface=creature_surf,
+            color=dynamic_color,
+            center=(self.radius, self.radius),
+            radius=self.radius
+        )
+
+        # 6. Blit the transparent creature onto the main screen
+        # Position is the top-left corner of the surface
+        screen.blit(creature_surf, (int(self.x - self.radius), int(self.y - self.radius)))
+
+        # 7. Draw the vision cone if enabled
+        if show_vision:
+            self._draw_vision_cone(screen)
+    
+    def _draw_vision_cone(self, screen):
+        """Draws the creature's vision cone as an outline."""
+        if self.vx == 0 and self.vy == 0: return
+
+        vision_outline_color = (*self.color, 150)
+        angle = math.atan2(self.vy, self.vx)
+        
+        p1 = (int(self.x), int(self.y))
+        angle_left = angle - self.fov_angle / 2
+        p2 = (int(self.x + self.sense_radius * math.cos(angle_left)), 
+              int(self.y + self.sense_radius * math.sin(angle_left)))
+        angle_right = angle + self.fov_angle / 2
+        p3 = (int(self.x + self.sense_radius * math.cos(angle_right)), 
+              int(self.y + self.sense_radius * math.sin(angle_right)))
+              
+        pygame.draw.aalines(screen, vision_outline_color, False, [p2, p1, p3])

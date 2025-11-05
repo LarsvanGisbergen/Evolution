@@ -7,11 +7,9 @@ FPS = 60
 COLOR_BG = (25, 25, 35)
 WORLD_GRID_CELL_SIZE = 100 # For the performance optimization grid
 
-# --- Food Settings (This is the corrected part) ---
-INITIAL_FOOD_COUNT = 20
-# RENAMED: This variable controls the interval between spawning events.
+# --- Food Settings 
+INITIAL_FOOD_COUNT = 60
 FOOD_SPAWN_INTERVAL = 100  # Spawns food every 10 ticks.
-# NEW: This variable controls how much food is created during each event.
 FOOD_SPAWN_AMOUNT = 2
 FOOD_ENERGY = 100.0
 
