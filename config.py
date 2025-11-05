@@ -8,10 +8,10 @@ COLOR_BG = (25, 25, 35)
 WORLD_GRID_CELL_SIZE = 100 # For the performance optimization grid
 
 # --- Food Settings 
-INITIAL_FOOD_COUNT = 60
+INITIAL_FOOD_COUNT = 300
 FOOD_SPAWN_INTERVAL = 100  # Spawns food every 10 ticks.
 FOOD_SPAWN_AMOUNT = 2
-FOOD_ENERGY = 100.0
+FOOD_ENERGY = 20.0
 
 # --- Graph Settings ---
 GRAPH_UPDATE_RATE = 60

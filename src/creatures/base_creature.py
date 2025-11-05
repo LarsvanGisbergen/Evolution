@@ -40,6 +40,8 @@ class BaseCreature:
         self.max_offspring = species_config.get("max_offspring", 1)
         self.nn_inputs = []
         self.nn_outputs = []
+        self.lifespan = species_config["lifespan_ticks"]
+        self.population_cap = species_config["population_cap"]
 
     def _normalize_angle(self, angle):
         return (angle + math.pi) % (2 * math.pi) - math.pi
@@ -129,7 +131,8 @@ class BaseCreature:
         current_speed = math.hypot(self.vx, self.vy)
         move_energy_loss = self.move_cost * (current_speed / self.max_speed)**2
         self.energy -= (self.metabolic_rate + move_energy_loss)
-
+        self.age += 1
+        
         # 4. Handle the Action Intent (NEW)
         # For now, this output does nothing. But the framework is here.
         # In the future, we could check if action_output > 0.5 and then
@@ -138,21 +141,27 @@ class BaseCreature:
 
     def reproduce(self):
         """
-        Creates a list of new offspring for a single, flat energy cost.
-        Returns the list of children and the total energy cost.
+        Creates offspring for a flat fee, spawning them just outside the parent's radius.
         """
-        # The cost is now a single, flat fee, not per-child.
         flat_reproduction_cost = self.reproduction_cost
-        
         children = []
-        # Check if the creature can afford this flat fee.
         if self.energy >= flat_reproduction_cost:
-            # If it can, determine how many offspring to create.
             num_offspring = random.randint(self.min_offspring, self.max_offspring)
             
             for _ in range(num_offspring):
-                # The child creation logic is the same as before.
+                # --- THIS IS THE MODIFIED PART ---
+                # Create a new creature instance first to get its radius
                 child = BaseCreature(self.x, self.y, self.species_config)
+                
+                # Calculate a safe spawn position
+                spawn_angle = random.uniform(0, 2 * math.pi)
+                # Spawn distance is parent radius + child radius + a small gap
+                spawn_dist = self.radius + child.radius + 1
+                
+                child.x = self.x + spawn_dist * math.cos(spawn_angle)
+                child.y = self.y + spawn_dist * math.sin(spawn_angle)
+                # --------------------------------
+
                 mutated_genome = self.genome.copy()
                 for i in range(len(mutated_genome)):
                     if random.random() < self.mutation_rate:
@@ -162,10 +171,8 @@ class BaseCreature:
                 child.nn.set_genome(child.genome)
                 children.append(child)
             
-            # Return the created children and the single flat cost.
             return children, flat_reproduction_cost
         else:
-            # Not enough energy for the flat fee, so no children are born.
             return [], 0
     
     def update(self, world):
@@ -176,7 +183,7 @@ class BaseCreature:
     
 
     def is_alive(self):
-        return self.energy > 0
+        return self.energy > 0 and self.age < self.lifespan
 
     def _steal_energy(self, target):
         stolen_energy = min(target.energy, self.steal_amount)
@@ -186,12 +193,19 @@ class BaseCreature:
             self.energy = self.max_energy
 
     def on_collide(self, other_creature, world):
+        """
+        Handles all collision logic. First, resolves the physical overlap,
+        then checks for special species-specific interactions.
+        """
+        # --- 1. Universal Physical Response ---
+        self._handle_physical_collision(other_creature)
+
+        # --- 2. Species-Specific Interaction ---
         other_species = other_creature.species_name
         if other_species in self.collision_interactions:
             action = self.collision_interactions[other_species]
             if action == "steal_energy":
                 self._steal_energy(other_creature)
-                
     
     
     def draw(self, screen, show_vision=False):
@@ -242,3 +256,30 @@ class BaseCreature:
               int(self.y + self.sense_radius * math.sin(angle_right)))
               
         pygame.draw.aalines(screen, vision_outline_color, False, [p2, p1, p3])
+        
+    def _handle_physical_collision(self, other):
+        """Calculates and applies a 'push-out' force to resolve physical overlap."""
+        dx = self.x - other.x
+        dy = self.y - other.y
+        distance = math.hypot(dx, dy)
+        
+        # Avoid division by zero if creatures are perfectly on top of each other
+        if distance == 0:
+            distance = 0.01
+            dx = 0.01
+
+        # Calculate overlap amount
+        overlap = (self.radius + other.radius) - distance
+        if overlap > 0:
+            # The amount each creature needs to move
+            push_amount = overlap / 2
+            
+            # Normalized direction vector
+            norm_dx = dx / distance
+            norm_dy = dy / distance
+            
+            # Apply the push to both creatures
+            self.x += norm_dx * push_amount
+            self.y += norm_dy * push_amount
+            other.x -= norm_dx * push_amount
+            other.y -= norm_dy * push_amount

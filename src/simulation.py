@@ -147,22 +147,26 @@ class Simulation:
                     self.amount_label.set_text(f"Spawn Amount: {self.food_spawn_amount}")
 
     def update(self, time_delta):
+        """Updates the state of the simulation for one tick."""
         self.gui_manager.update(time_delta)
         
-        # OPTIMIZATION: Update the spatial grid once per frame
+        # 1. Update the spatial grid once per frame for efficiency
         self.world.update_grid()
 
-        # Update creatures (their internal logic and movement)
+        # 2. Update all creatures (movement, energy loss, aging)
         for creature in self.world.creatures:
             creature.update(self.world)
             self.world.handle_boundaries(creature)
         
-        # OPTIMIZATION: Efficiently check for collisions using the grid
+        # 3. Handle Collisions using the grid
         checked_pairs = set()
         for creature_a in self.world.creatures:
+            # Only check against creatures in the local neighborhood
             local_creatures = self.world.get_neighbors(creature_a, creature_a.radius * 2)['creatures']
             for creature_b in local_creatures:
                 if creature_a is creature_b: continue
+                
+                # Use a sorted tuple of IDs to ensure each pair is checked only once
                 pair = tuple(sorted([id(creature_a), id(creature_b)]))
                 if pair in checked_pairs: continue
                 
@@ -172,7 +176,7 @@ class Simulation:
                     creature_b.on_collide(creature_a, self.world)
                     checked_pairs.add(pair)
         
-        # Handle eating
+        # 4. Handle eating using the grid
         eaten_food = []
         for creature in self.world.creatures:
             local_food = self.world.get_neighbors(creature, creature.radius)['food']
@@ -186,22 +190,27 @@ class Simulation:
                     break
         self.world.food = [f for f in self.world.food if f not in eaten_food]
         
-        # Handle Reproduction and Deaths
+        # 5. Handle Reproduction with Population Caps
+        species_counts = defaultdict(int)
+        for creature in self.world.creatures:
+            species_counts[creature.species_name] += 1
+
         newborns = []
         for creature in self.world.creatures:
-            if creature.energy >= creature.reproduction_threshold:
+            current_pop = species_counts[creature.species_name]
+            if creature.energy >= creature.reproduction_threshold and current_pop < creature.population_cap:
                 children, total_cost = creature.reproduce()
                 if children:
                     creature.energy -= total_cost
                     newborns.extend(children)
+                    species_counts[creature.species_name] += len(children)
         self.world.creatures.extend(newborns)
+
+        # 6. Handle Deaths from starvation or old age
         self.world.creatures = [c for c in self.world.creatures if c.is_alive()]
         
-        # Spawn new food and log data
+        # 7. Spawn new food and log data periodically
         self.tick_counter += 1
-        
-        # --- MODIFIED: Use the dynamic self. variables ---
-        # The 'if' condition prevents division by zero if interval is 0, which it can't be with our slider.
         if self.food_spawn_interval > 0 and self.tick_counter % self.food_spawn_interval == 0:
             self.spawn_food(amount=self.food_spawn_amount)
             
